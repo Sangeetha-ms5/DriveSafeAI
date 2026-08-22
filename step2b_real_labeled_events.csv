@@ -1,0 +1,2 @@
+accel_x,accel_y,accel_z,car_id,lat,lon,magnitude,timestamp,firebase_key,brake_force,is_real_danger
+1.6,-3.5,20.200000000000003,Car 3,12.9716,77.5946,21.4,2026-08-22T09:28:16.999Z,-P-cn9oXjXE7jj16-MIR,11.599999999999998,True

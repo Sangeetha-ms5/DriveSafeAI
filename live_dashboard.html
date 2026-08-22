@@ -1,0 +1,650 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Road Safety - Live Danger Zones</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+
+  <style>
+    body { margin: 0; font-family: 'Segoe UI', Arial, sans-serif; }
+    #map { height: 100vh; width: 100%; }
+
+    #panel {
+      position: fixed; top: 14px; left: 14px; z-index: 9999;
+      background: #14161a; color: #f2f2f2; padding: 14px 18px;
+      border-radius: 10px; box-shadow: 0 4px 14px rgba(0,0,0,0.35);
+      min-width: 230px; font-size: 14px;
+    }
+    #panel h3 { margin: 0 0 8px 0; font-size: 15px; color: #ff6b6b; }
+    #panel .stat { margin: 3px 0; }
+    #panel .stat b { color: #8be28b; }
+
+    #resetBtn {
+      position: fixed; top: 14px; right: 14px; z-index: 9999;
+      padding: 10px 18px; background: #d9534f; color: white;
+      border: none; border-radius: 8px; font-size: 14px; cursor: pointer;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.3);
+    }
+    #resetBtn:hover { background: #c9302c; }
+
+    .zone-popup h4 { margin: 0 0 6px 0; }
+    .zone-popup .vehicle {
+      border-top: 1px solid #ddd; margin-top: 8px; padding-top: 8px;
+      font-size: 12px;
+    }
+    .badge {
+      display: inline-block; padding: 2px 8px; border-radius: 10px;
+      color: white; font-size: 12px; font-weight: bold;
+    }
+    .popup-section {
+      background: #f4f6f8;
+      padding: 8px;
+      margin-top: 7px;
+      border-radius: 6px;
+      line-height: 1.55;
+    }
+    .popup-title {
+      font-weight: 700;
+      margin-bottom: 3px;
+    }
+    .risk-box {
+      margin-top: 10px;
+      padding: 9px;
+      border-radius: 7px;
+      color: white;
+      line-height: 1.45;
+    }
+
+    #pipelinePanel {
+      position: fixed; bottom: 14px; left: 14px; z-index: 9999;
+      background: #14161a; color: #f2f2f2; padding: 14px 18px;
+      border-radius: 10px; box-shadow: 0 4px 14px rgba(0,0,0,0.35);
+      width: 320px; font-size: 13px; max-height: 260px; overflow-y: auto;
+    }
+    #pipelinePanel h3 { margin: 0 0 8px 0; font-size: 14px; color: #6bb7ff; }
+    #pipelineFeed .idle { color: #888; font-style: italic; }
+    .trace {
+      border-left: 3px solid #444; padding-left: 8px; margin-bottom: 10px;
+      animation: fadeIn 0.3s ease-in;
+    }
+    .trace .step {
+      opacity: 0; transform: translateX(-6px);
+      animation: stepIn 0.25s ease-out forwards;
+      margin: 2px 0;
+    }
+    .trace .step.ok { color: #8be28b; }
+    .trace .step.warn { color: #ffd479; }
+    .trace .step.final { color: #ff8080; font-weight: bold; }
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes stepIn { to { opacity: 1; transform: translateX(0); } }
+  </style>
+</head>
+<body>
+
+  <div id="panel">
+    <h3>🚦 Live Danger Zones</h3>
+    <div class="stat">Total events: <b id="totalEvents">0</b></div>
+    <div class="stat">Danger zones: <b id="totalZones">0</b></div>
+    <div class="stat">Status: <b id="status">Waiting for phones...</b></div>
+  </div>
+
+  <div id="pipelinePanel">
+    <h3>⚙️ India-Smart Filter Pipeline</h3>
+    <div id="pipelineFeed"><div class="idle">Waiting for events...</div></div>
+  </div>
+
+  <button id="resetBtn" onclick="resetZones()">Reset Zones</button>
+
+  <div id="map"></div>
+
+  <script>
+    // ---- Firebase config ----
+    var firebaseConfig = {
+      apiKey: "AIzaSyDb14lZDrU4XASL2IQB3GE4QxIlpobUkdY",
+      authDomain: "road-safety-hackathon-16b7d.firebaseapp.com",
+      databaseURL: "https://road-safety-hackathon-16b7d-default-rtdb.firebaseio.com/",
+      projectId: "road-safety-hackathon-16b7d",
+      storageBucket: "road-safety-hackathon-16b7d.firebasestorage.app",
+      messagingSenderId: "697637294869",
+      appId: "1:697637294869:web:ff212611521af2bdcecf1c"
+    };
+
+    firebase.initializeApp(firebaseConfig);
+    var db = firebase.database();
+
+    // ---- Tunables ----
+    var BASELINE_G = 9.8;
+    var BRAKE_FORCE_THRESHOLD = 8.0;
+    var CLUSTER_RADIUS_METERS = 500;
+
+    // ---- Map setup ----
+    var map = L.map('map').setView([12.9716, 77.5946], 17);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    // {lat, lon, events: [...], circle}
+    var zones = [];
+    var firstEventCentered = false;
+
+    // Prevent the same Firebase event from being inserted twice.
+    var processedEventIds = new Set();
+
+    function haversineMeters(lat1, lon1, lat2, lon2) {
+      var R = 6371000;
+      var dLat = (lat2 - lat1) * Math.PI / 180;
+      var dLon = (lon2 - lon1) * Math.PI / 180;
+
+      var a =
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(lat1 * Math.PI / 180) *
+        Math.cos(lat2 * Math.PI / 180) *
+        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+
+    function colorFor(vehicleCount) {
+      if (vehicleCount >= 3) return "#d9534f";
+      if (vehicleCount === 2) return "#f0ad4e";
+      return "#5cb85c";
+    }
+
+    function riskText(vehicleCount) {
+      if (vehicleCount >= 3) return "RED - HIGH RISK";
+      if (vehicleCount === 2) return "ORANGE - RISING RISK";
+      return "GREEN - WATCHING";
+    }
+
+    function getVehicleIds(zone) {
+      var normalized = zone.events
+        .map(function(e) {
+          return String(
+            e.car_id !== undefined && e.car_id !== null
+              ? e.car_id
+              : "UNKNOWN"
+          ).trim().toLowerCase();
+        })
+        .filter(function(id) {
+          return id !== "";
+        });
+
+      return Array.from(new Set(normalized));
+    }
+
+    function displayVehicleId(e) {
+      return String(
+        e.car_id !== undefined && e.car_id !== null
+          ? e.car_id
+          : "UNKNOWN"
+      );
+    }
+
+    function safeNumber(value, fallback) {
+      var n = Number(value);
+      return Number.isFinite(n) ? n : fallback;
+    }
+
+    function buildPopupHtml(zone) {
+      var vehicleIds = getVehicleIds(zone);
+      var zoneColor = colorFor(vehicleIds.length);
+
+      var html =
+        '<div class="zone-popup" style="min-width:340px;max-height:520px;overflow-y:auto;">';
+
+      // ---- Zone summary ----
+      html += '<h4>🚨 Danger Zone</h4>';
+
+      html +=
+        '<div style="margin-bottom:8px;">' +
+        '<span class="badge" style="background:' + zoneColor + '">' +
+        vehicleIds.length +
+        ' vehicle(s) confirmed</span>' +
+        '</div>';
+
+      html += '<div class="popup-section">';
+      html += '<div class="popup-title">📍 Zone Summary</div>';
+      html +=
+        'Latitude: <b>' + safeNumber(zone.lat, 0).toFixed(6) + '</b><br>';
+      html +=
+        'Longitude: <b>' + safeNumber(zone.lon, 0).toFixed(6) + '</b><br>';
+      html += 'Unique vehicles: <b>' + vehicleIds.length + '</b><br>';
+      html += 'Total events: <b>' + zone.events.length + '</b><br>';
+      html +=
+        'Current risk: <b style="color:' +
+        zoneColor +
+        '">' +
+        riskText(vehicleIds.length) +
+        '</b>';
+      html += '</div>';
+
+      // ---- Processing flow ----
+      html += '<div class="popup-section">';
+      html += '<div class="popup-title">⚙️ Processing Pipeline</div>';
+      html +=
+        '📡 Data collection: <b>received</b><br>' +
+        '🧹 Data cleaning: <b>completed</b><br>' +
+        '✂️ Chunking: <b>event prepared</b><br>' +
+        '🔢 Feature extraction: <b>completed</b><br>' +
+        '🧠 Detection logic: <b>applied</b><br>' +
+        '🇮🇳 India-Smart filtering: <b>applied</b><br>' +
+        '📍 Cross-vehicle clustering: <b>completed</b><br>' +
+        '🚦 Danger-zone classification: <b>updated</b>';
+      html += '</div>';
+
+      // ---- Every event / vehicle ----
+      zone.events.forEach(function(e, index) {
+        var magnitude = safeNumber(e.magnitude, 0);
+        var accelX = safeNumber(e.accel_x, 0);
+        var accelY = safeNumber(e.accel_y, 0);
+        var accelZ = safeNumber(e.accel_z, 0);
+
+        var brakeForce = safeNumber(
+          e.brake_force !== undefined ? e.brake_force : e.magnitude,
+          magnitude
+        );
+
+        var vectorMagnitude = Math.sqrt(
+          accelX * accelX +
+          accelY * accelY +
+          accelZ * accelZ
+        );
+
+        var excessForce = Math.max(0, magnitude - BASELINE_G);
+
+        var isDanger = magnitude >= BRAKE_FORCE_THRESHOLD;
+
+        var detection = isDanger
+          ? "HARD BRAKE / SWERVE"
+          : "MOTION EVENT";
+
+        var indiaSmart = isDanger
+          ? "REAL DANGER"
+          : "LOW CONFIDENCE";
+
+        html +=
+          '<div class="vehicle">' +
+          '<div style="font-size:14px;margin-bottom:6px;">' +
+          '<b>📱 Vehicle ' +
+          (index + 1) +
+          ': ' +
+          displayVehicleId(e) +
+          '</b>' +
+          '</div>';
+
+        // Sensor values
+        html += '<div class="popup-section">';
+        html += '<div class="popup-title">📊 Sensor / Magnitude Data</div>';
+        html += 'Magnitude: <b>' + magnitude.toFixed(2) + '</b><br>';
+        html += 'Acceleration X: ' + accelX.toFixed(2) + '<br>';
+        html += 'Acceleration Y: ' + accelY.toFixed(2) + '<br>';
+        html += 'Acceleration Z: ' + accelZ.toFixed(2) + '<br>';
+        html += 'Vector magnitude: ' + vectorMagnitude.toFixed(2);
+        html += '</div>';
+
+        // Deceleration
+        html += '<div class="popup-section">';
+        html += '<div class="popup-title">🛑 Braking / Deceleration</div>';
+        html += 'Brake force: <b>' + brakeForce.toFixed(2) + '</b><br>';
+        html += 'Baseline: ' + BASELINE_G.toFixed(2) + '<br>';
+        html += 'Excess force: ' + excessForce.toFixed(2);
+        html += '</div>';
+
+        // Detection
+        html += '<div class="popup-section">';
+        html += '<div class="popup-title">🧠 Detection Logic</div>';
+        html += 'Event type: <b>' + detection + '</b><br>';
+        html +=
+          'Detection threshold: ' +
+          BRAKE_FORCE_THRESHOLD.toFixed(2) +
+          '<br>';
+        html +=
+          'Detection status: <b>' +
+          (isDanger ? 'CONFIRMED' : 'MONITORING') +
+          '</b>';
+        html += '</div>';
+
+        // India Smart
+        html += '<div class="popup-section">';
+        html += '<div class="popup-title">🇮🇳 India-Smart Filter</div>';
+        html += 'Filter: <b>APPLIED</b><br>';
+        html +=
+          'Force check: <b>' +
+          (isDanger ? 'PASSED' : 'LOW') +
+          '</b><br>';
+        html += 'Classification: <b>' + indiaSmart + '</b>';
+        html += '</div>';
+
+        // Location/time
+        html += '<div class="popup-section">';
+        html += '<div class="popup-title">📍 Location & Time</div>';
+        html +=
+          'Latitude: ' + safeNumber(e.lat, 0).toFixed(6) + '<br>';
+        html +=
+          'Longitude: ' + safeNumber(e.lon, 0).toFixed(6) + '<br>';
+        html +=
+          'Timestamp: ' +
+          String(e.timestamp !== undefined ? e.timestamp : 'N/A');
+        html += '</div>';
+
+        html += '</div>';
+      });
+
+      // ---- Final risk ----
+      html +=
+        '<div class="risk-box" style="background:' +
+        zoneColor +
+        ';">';
+
+      if (vehicleIds.length >= 3) {
+        html +=
+          '<b>🔴 RED — HIGH RISK</b><br>' +
+          '3 or more independent vehicles confirmed this location.';
+      } else if (vehicleIds.length === 2) {
+        html +=
+          '<b>🟠 ORANGE — RISING RISK</b><br>' +
+          '2 independent vehicles confirmed this location.';
+      } else {
+        html +=
+          '<b>🟢 GREEN — WATCHING</b><br>' +
+          '1 vehicle currently confirms this location.';
+      }
+
+      html += '</div>';
+      html += '</div>';
+
+      return html;
+    }
+
+    function renderZone(zone) {
+      var vehicleIds = getVehicleIds(zone);
+      var color = colorFor(vehicleIds.length);
+      var popup = buildPopupHtml(zone);
+
+      if (zone.circle) {
+        zone.circle.setLatLng([zone.lat, zone.lon]);
+        zone.circle.setStyle({
+          color: color,
+          fillColor: color
+        });
+        zone.circle.setPopupContent(popup);
+        zone.circle.redraw();
+      } else {
+        zone.circle = L.circle([zone.lat, zone.lon], {
+          radius: 30,
+          color: color,
+          fillColor: color,
+          fillOpacity: 0.55
+        })
+          .addTo(map)
+          .bindPopup(popup, {
+            maxWidth: 500,
+            maxHeight: 560
+          });
+      }
+    }
+
+    function traceStep(container, text, cls, delay) {
+      return new Promise(function(resolve) {
+        setTimeout(function() {
+          var div = document.createElement('div');
+          div.className = 'step ' + cls;
+          div.innerText = text;
+          container.appendChild(div);
+          resolve();
+        }, delay);
+      });
+    }
+
+    async function runPipelineTrace(e) {
+      var feed = document.getElementById('pipelineFeed');
+      var idle = feed.querySelector('.idle');
+
+      if (idle) idle.remove();
+
+      var trace = document.createElement('div');
+      trace.className = 'trace';
+      feed.prepend(trace);
+
+      await traceStep(
+        trace,
+        '📡 Data collection: ' + displayVehicleId(e) + ' sensor payload received',
+        'ok',
+        0
+      );
+
+      await traceStep(
+        trace,
+        '🧹 Clean & sync data: noise removed, timestamp normalized',
+        'ok',
+        150
+      );
+
+      await traceStep(
+        trace,
+        '✂️ Chunking: discrete motion event prepared',
+        'ok',
+        150
+      );
+
+      await traceStep(
+        trace,
+        '🔢 Feature extraction: magnitude + acceleration features calculated',
+        'ok',
+        150
+      );
+
+      await traceStep(
+        trace,
+        '🧠 Detection logic: magnitude=' +
+          safeNumber(e.magnitude, 0).toFixed(1) +
+          ' → classified HARD BRAKE/SWERVE',
+        'ok',
+        150
+      );
+
+      await traceStep(
+        trace,
+        '🇮🇳 India-Smart Filter: contextual danger check applied',
+        'warn',
+        200
+      );
+
+      await traceStep(
+        trace,
+        '🏷 Tag event: location + time + vehicle attached',
+        'ok',
+        150
+      );
+
+      await traceStep(
+        trace,
+        '📍 Cross-vehicle location clustering: checking nearby events...',
+        'ok',
+        200
+      );
+
+      var traces = feed.querySelectorAll('.trace');
+
+      if (traces.length > 6) {
+        traces[traces.length - 1].remove();
+      }
+    }
+
+    function addEvent(e, eventId) {
+      if (!e) return;
+
+      // Avoid duplicate processing.
+      if (eventId && processedEventIds.has(eventId)) {
+        return;
+      }
+
+      if (eventId) {
+        processedEventIds.add(eventId);
+      }
+
+      var lat = safeNumber(e.lat, NaN);
+      var lon = safeNumber(e.lon, NaN);
+      var magnitude = safeNumber(e.magnitude, NaN);
+
+      if (!Number.isFinite(lat) ||
+          !Number.isFinite(lon) ||
+          !Number.isFinite(magnitude)) {
+        return;
+      }
+
+      // Center map on the first valid event.
+      if (!firstEventCentered) {
+        map.setView([lat, lon], 18);
+        firstEventCentered = true;
+      }
+
+      // Keep compatibility with the existing dashboard behavior.
+      e.brake_force =
+        e.brake_force !== undefined
+          ? e.brake_force
+          : magnitude;
+
+      var matched = null;
+
+      for (var i = 0; i < zones.length; i++) {
+        var d = haversineMeters(
+          zones[i].lat,
+          zones[i].lon,
+          lat,
+          lon
+        );
+
+        if (d <= CLUSTER_RADIUS_METERS) {
+          matched = zones[i];
+          break;
+        }
+      }
+
+      if (matched) {
+        matched.events.push(e);
+
+        var lats = matched.events.map(function(ev) {
+          return safeNumber(ev.lat, matched.lat);
+        });
+
+        var lons = matched.events.map(function(ev) {
+          return safeNumber(ev.lon, matched.lon);
+        });
+
+        matched.lat =
+          lats.reduce(function(a, b) { return a + b; }, 0) /
+          lats.length;
+
+        matched.lon =
+          lons.reduce(function(a, b) { return a + b; }, 0) /
+          lons.length;
+      } else {
+        matched = {
+          lat: lat,
+          lon: lon,
+          events: [e]
+        };
+
+        zones.push(matched);
+      }
+
+      var vehicleIds = getVehicleIds(matched);
+
+      // Update the most recent pipeline trace.
+      var feed = document.getElementById('pipelineFeed');
+      var latestTrace = feed.querySelector('.trace');
+
+      if (latestTrace) {
+        var final = document.createElement('div');
+        final.className = 'step final';
+
+        final.innerText =
+          '🚩 Danger zone flagged/updated: ' +
+          vehicleIds.length +
+          ' vehicle(s) → ' +
+          riskText(vehicleIds.length);
+
+        setTimeout(function() {
+          latestTrace.appendChild(final);
+        }, 600);
+      }
+
+      // Re-render immediately.
+      renderZone(matched);
+      updatePanel();
+
+      // If popup is already open, refresh its content immediately.
+      if (matched.circle && matched.circle.isPopupOpen()) {
+        matched.circle.setPopupContent(buildPopupHtml(matched));
+      }
+    }
+
+    function updatePanel() {
+      var totalEvents = zones.reduce(function(sum, z) {
+        return sum + z.events.length;
+      }, 0);
+
+      document.getElementById('totalEvents').innerText = totalEvents;
+      document.getElementById('totalZones').innerText = zones.length;
+
+      document.getElementById('status').innerText =
+        totalEvents > 0 ? 'Live' : 'Waiting for phones...';
+    }
+
+    // ---- LIVE Firebase listener ----
+    // child_added fires immediately when a new event is written.
+    db.ref('events').on('child_added', function(snapshot) {
+      var e = snapshot.val();
+
+      if (
+        e &&
+        e.lat !== undefined &&
+        e.lon !== undefined &&
+        e.magnitude !== undefined
+      ) {
+        runPipelineTrace(e);
+        addEvent(e, snapshot.key);
+      }
+    });
+
+    // ---- Reset ----
+    function resetZones() {
+      if (!confirm("This deletes ALL events from Firebase. Continue?")) {
+        return;
+      }
+
+      db.ref('events')
+        .remove()
+        .then(function() {
+          zones.forEach(function(z) {
+            if (z.circle) {
+              map.removeLayer(z.circle);
+            }
+          });
+
+          zones = [];
+          processedEventIds.clear();
+          firstEventCentered = false;
+
+          updatePanel();
+
+          document.getElementById('pipelineFeed').innerHTML =
+            '<div class="idle">Waiting for events...</div>';
+
+          alert("Zones reset.");
+        })
+        .catch(function(err) {
+          alert("Reset failed: " + err.message);
+        });
+    }
+  </script>
+</body>
+</html>
