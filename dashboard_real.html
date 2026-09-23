@@ -1,451 +1,62 @@
-import json
-import re
+<!DOCTYPE html>
+<html>
+<head>
+    
+    <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
+    <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.3/dist/leaflet.js"></script>
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Leaflet.awesome-markers/2.0.2/leaflet.awesome-markers.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.3/dist/leaflet.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.2/dist/css/bootstrap.min.css"/>
+    <link rel="stylesheet" href="https://netdna.bootstrapcdn.com/bootstrap/3.0.0/css/bootstrap-glyphicons.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.2.0/css/all.min.css"/>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/Leaflet.awesome-markers/2.0.2/leaflet.awesome-markers.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/python-visualization/folium/folium/templates/leaflet.awesome.rotate.min.css"/>
+    
+            <meta name="viewport" content="width=device-width,
+                initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+            <style>
+                #map_ae868a9c76d39b7970b2d089047f542e {
+                    position: relative;
+                    width: 100.0%;
+                    height: 100.0%;
+                    left: 0.0%;
+                    top: 0.0%;
+                }
+                .leaflet-container { font-size: 1rem; }
+            </style>
+
+            <style>html, body {
+                width: 100%;
+                height: 100%;
+                margin: 0;
+                padding: 0;
+            }
+            </style>
+
+            <style>#map {
+                position:absolute;
+                top:0;
+                bottom:0;
+                right:0;
+                left:0;
+                }
+            </style>
+
+            <script>
+                L_NO_TOUCH = false;
+                L_DISABLE_3D = false;
+            </script>
+
+        
+</head>
+<body>
+    
+    
+            <div class="folium-map" id="map_ae868a9c76d39b7970b2d089047f542e" ></div>
+        
 
-import folium
-import pandas as pd
-
-
-# ============================================================
-# STEP 6B — LIVE ROAD SAFETY V2V DASHBOARD
-# ============================================================
-
-# Severity:
-#
-# LOW:
-#   magnitude < 10
-#   -> No alert
-#
-# MEDIUM:
-#   10 <= magnitude <= 20
-#   -> Road hazard detected
-#   -> Warn nearby vehicles
-#
-# HIGH:
-#   magnitude > 20
-#   -> Accident detected
-#   -> V2V warning within 1000 meters
-#   -> Voice warning
-#   -> Find nearby hospitals
-#   -> Firebase emergency alert
-#
-# ============================================================
-
-
-# ============================================================
-# FILE SETTINGS
-# ============================================================
-
-INPUT_CSV = "step4b_real_danger_zones.csv"
-FALLBACK_CSV = "step2b_real_labeled_events.csv"
-OUTPUT_HTML = "dashboard_real.html"
-
-
-# ============================================================
-# V2V WARNING RADIUS
-# ============================================================
-
-WARNING_RADIUS = 1000  # meters
-
-
-# ============================================================
-# HOSPITAL SEARCH RADIUS
-# ============================================================
-
-HOSPITAL_SEARCH_RADIUS = 10000  # meters
-
-
-# ============================================================
-# MAGNITUDE THRESHOLDS
-# ============================================================
-
-LOW_THRESHOLD = 10
-HIGH_THRESHOLD = 20
-
-
-# ============================================================
-# FIREBASE WEB CONFIG
-# ============================================================
-
-FIREBASE_WEB_CONFIG = {
-    "apiKey": "AIzaSyDb14lZDrU4XASL2IQB3GE4QxIlpobUkYd",
-    "authDomain": "road-safety-hackathon-16b7d.firebaseapp.com",
-    "projectId": "road-safety-hackathon-16b7d",
-    "storageBucket": "road-safety-hackathon-16b7d.firebasestorage.app",
-    "messagingSenderId": "697637294869",
-    "appId": "1:697637294869:web:ff212611521af2bdcecf1c",
-    "measurementId": "G-Y21NXEML0L",
-    "databaseURL": (
-        "https://road-safety-hackathon-16b7d-default-rtdb."
-        "firebaseio.com/"
-    ),
-}
-
-
-# ============================================================
-# RISK COLOR
-# ============================================================
-
-def risk_color(n_events):
-    """Return map color based on number of events."""
-    if n_events >= 2:
-        return "red"
-
-    if n_events >= 1:
-        return "orange"
-
-    return "green"
-
-
-# ============================================================
-# BUILD DASHBOARD
-# ============================================================
-
-def build_dashboard():
-
-    print()
-    print("==============================================")
-    print(" STEP 6B — LIVE ROAD SAFETY V2V DASHBOARD")
-    print("==============================================")
-    print()
-
-    # ========================================================
-    # READ DANGER ZONE DATA
-    # ========================================================
-
-    df = pd.DataFrame()
-
-    try:
-        df = pd.read_csv(INPUT_CSV)
-
-        print(f"Loaded danger zones from {INPUT_CSV}")
-
-    except FileNotFoundError:
-        print(f"{INPUT_CSV} not found.")
-
-    except Exception as error:
-        print(f"Error reading {INPUT_CSV}: {error}")
-
-    # ========================================================
-    # FALLBACK DATA
-    # ========================================================
-
-    if df.empty:
-
-        try:
-            fallback = pd.read_csv(FALLBACK_CSV)
-
-            if "is_real_danger" in fallback.columns:
-
-                # Handle values such as True, 1, "True", "true"
-                danger_mask = (
-                    fallback["is_real_danger"]
-                    .astype(str)
-                    .str.lower()
-                    .isin(["true", "1", "yes"])
-                )
-
-                df = fallback[danger_mask].copy()
-
-            else:
-                df = fallback.copy()
-
-            if not df.empty:
-
-                if "cluster_id" not in df.columns:
-                    df["cluster_id"] = range(len(df))
-
-                print(
-                    f"Using fallback danger events from "
-                    f"{FALLBACK_CSV}"
-                )
-
-        except FileNotFoundError:
-
-            print("No danger CSV available.")
-
-        except Exception as error:
-
-            print(
-                f"Error reading fallback CSV: {error}"
-            )
-
-    # ========================================================
-    # VALIDATE GPS COLUMNS
-    # ========================================================
-
-    if not df.empty:
-
-        if "lat" in df.columns and "lon" in df.columns:
-
-            df["lat"] = pd.to_numeric(
-                df["lat"],
-                errors="coerce",
-            )
-
-            df["lon"] = pd.to_numeric(
-                df["lon"],
-                errors="coerce",
-            )
-
-            df = df.dropna(
-                subset=["lat", "lon"]
-            ).copy()
-
-        else:
-
-            print(
-                "Warning: CSV does not contain "
-                "'lat' and 'lon' columns."
-            )
-
-    # ========================================================
-    # INITIAL MAP LOCATION
-    # ========================================================
-
-    if (
-        not df.empty
-        and "lat" in df.columns
-        and "lon" in df.columns
-    ):
-
-        center_lat = float(df["lat"].mean())
-        center_lon = float(df["lon"].mean())
-
-    else:
-
-        # Bengaluru default
-        center_lat = 12.9716
-        center_lon = 77.5946
-
-        print("No static danger zones yet.")
-        print("Starting map at default view.")
-
-    # ========================================================
-    # CREATE FOLIUM MAP
-    # ========================================================
-
-    m = folium.Map(
-        location=[
-            center_lat,
-            center_lon,
-        ],
-        zoom_start=14,
-        control_scale=True,
-    )
-
-    # ========================================================
-    # STATIC DANGER ZONES
-    # ========================================================
-
-    if (
-        not df.empty
-        and "lat" in df.columns
-        and "lon" in df.columns
-    ):
-
-        if "cluster_id" not in df.columns:
-            df["cluster_id"] = range(len(df))
-
-        for cluster_id, group in df.groupby(
-            "cluster_id"
-        ):
-
-            avg_lat = float(group["lat"].mean())
-            avg_lon = float(group["lon"].mean())
-
-            n_events = len(group)
-
-            # ------------------------------------------------
-            # VEHICLES
-            # ------------------------------------------------
-
-            if "car_id" in group.columns:
-
-                cars = (
-                    group["car_id"]
-                    .astype(str)
-                    .str.strip()
-                    .nunique()
-                )
-
-            else:
-
-                cars = 0
-
-            # ------------------------------------------------
-            # BRAKE FORCE
-            # ------------------------------------------------
-
-            if "brake_force" in group.columns:
-
-                brake_values = pd.to_numeric(
-                    group["brake_force"],
-                    errors="coerce",
-                )
-
-                avg_force = brake_values.mean()
-
-                if pd.isna(avg_force):
-                    avg_force = 0
-
-            else:
-
-                avg_force = 0
-
-            # ------------------------------------------------
-            # POPUP
-            # ------------------------------------------------
-
-            popup_html = f"""
-            <div style="font-family:Arial;">
-                <h4 style="margin:0;color:#c62828;">
-                    🚨 Danger Zone {cluster_id}
-                </h4>
-
-                <b>Events:</b>
-                {n_events}
-
-                <br>
-
-                <b>Vehicles involved:</b>
-                {cars}
-
-                <br>
-
-                <b>Average brake force:</b>
-                {avg_force:.2f}
-            </div>
-            """
-
-            # ------------------------------------------------
-            # CIRCLE
-            # ------------------------------------------------
-
-            folium.Circle(
-                location=[
-                    avg_lat,
-                    avg_lon,
-                ],
-                radius=25,
-                color=risk_color(n_events),
-                fill=True,
-                fill_opacity=0.5,
-                popup=folium.Popup(
-                    popup_html,
-                    max_width=300,
-                ),
-            ).add_to(m)
-
-            # ------------------------------------------------
-            # MARKER
-            # ------------------------------------------------
-
-            folium.Marker(
-                location=[
-                    avg_lat,
-                    avg_lon,
-                ],
-                icon=folium.Icon(
-                    color="red",
-                    icon="warning-sign",
-                ),
-                popup=folium.Popup(
-                    popup_html,
-                    max_width=300,
-                ),
-            ).add_to(m)
-
-        # ----------------------------------------------------
-        # FIT MAP
-        # ----------------------------------------------------
-
-        if len(df) > 1:
-
-            m.fit_bounds(
-                [
-                    [
-                        float(df["lat"].min()),
-                        float(df["lon"].min()),
-                    ],
-                    [
-                        float(df["lat"].max()),
-                        float(df["lon"].max()),
-                    ],
-                ],
-                max_zoom=16,
-            )
-
-    # ========================================================
-    # SAVE INITIAL FOLIUM HTML
-    # ========================================================
-
-    m.save(OUTPUT_HTML)
-
-    # ========================================================
-    # READ GENERATED HTML
-    # ========================================================
-
-    with open(
-        OUTPUT_HTML,
-        "r",
-        encoding="utf-8",
-    ) as file:
-
-        html = file.read()
-
-    # ========================================================
-    # FIND FOLIUM MAP VARIABLE
-    # ========================================================
-
-    # Folium normally generates something like:
-    #
-    # var map_1234567890abcdef = L.map(...)
-    #
-
-    match = re.search(
-        r"var\s+(map_[A-Za-z0-9_]+)\s*=\s*L\.map",
-        html,
-    )
-
-    if not match:
-
-        # Alternative pattern for newer Folium versions
-        match = re.search(
-            r"(map_[A-Za-z0-9_]+)\s*=\s*L\.map",
-            html,
-        )
-
-    if not match:
-
-        raise RuntimeError(
-            "Could not find Folium map variable "
-            "inside generated HTML."
-        )
-
-    map_variable = match.group(1)
-
-    print(
-        f"Folium map variable: {map_variable}"
-    )
-
-    # ========================================================
-    # FIREBASE CONFIG JSON
-    # ========================================================
-
-    config_json = json.dumps(
-        FIREBASE_WEB_CONFIG
-    )
-
-    # ========================================================
-    # LIVE DASHBOARD CODE
-    #
-    # IMPORTANT:
-    # This is deliberately NOT an f-string.
-    # That prevents JavaScript ${...} expressions from
-    # conflicting with Python formatting.
-    # ========================================================
-
-    live_code = r"""
 <style>
 
 #v2v-panel {
@@ -741,7 +352,7 @@ def build_dashboard():
 // FIREBASE CONFIG
 // ========================================================
 
-const firebaseConfig = __FIREBASE_CONFIG__;
+const firebaseConfig = {"apiKey": "AIzaSyDb14lZDrU4XASL2IQB3GE4QxIlpobUkYd", "authDomain": "road-safety-hackathon-16b7d.firebaseapp.com", "projectId": "road-safety-hackathon-16b7d", "storageBucket": "road-safety-hackathon-16b7d.firebasestorage.app", "messagingSenderId": "697637294869", "appId": "1:697637294869:web:ff212611521af2bdcecf1c", "measurementId": "G-Y21NXEML0L", "databaseURL": "https://road-safety-hackathon-16b7d-default-rtdb.firebaseio.com/"};
 
 
 // ========================================================
@@ -780,7 +391,7 @@ try {
 // FOLIUM MAP
 // ========================================================
 
-const map = __MAP_VARIABLE__;
+const map = map_ae868a9c76d39b7970b2d089047f542e;
 
 
 // ========================================================
@@ -3065,95 +2676,115 @@ startEventListener();
 startConnectionListener();
 
 </script>
-"""
 
+</body>
+<script>
+    
+    
+            var map_ae868a9c76d39b7970b2d089047f542e = L.map(
+                "map_ae868a9c76d39b7970b2d089047f542e",
+                {
+                    center: [12.522252700000001, 76.90546866666666],
+                    crs: L.CRS.EPSG3857,
+                    ...{
+  "zoom": 14,
+  "zoomControl": true,
+  "preferCanvas": false,
+}
 
-    # ========================================================
-    # INJECT CONFIGURATION VALUES
-    # ========================================================
+                }
+            );
+            L.control.scale().addTo(map_ae868a9c76d39b7970b2d089047f542e);
 
-    live_code = live_code.replace(
-        "__FIREBASE_CONFIG__",
-        config_json,
-    )
+            
 
-    live_code = live_code.replace(
-        "__MAP_VARIABLE__",
-        map_variable,
-    )
+        
+    
+            var tile_layer_7ebd86ee318c36c99292a584e1e0bd89 = L.tileLayer(
+                "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+                {
+  "minZoom": 0,
+  "maxZoom": 19,
+  "maxNativeZoom": 19,
+  "noWrap": false,
+  "attribution": "\u0026copy; \u003ca href=\"https://www.openstreetmap.org/copyright\"\u003eOpenStreetMap\u003c/a\u003e contributors",
+  "subdomains": "abc",
+  "detectRetina": false,
+  "tms": false,
+  "opacity": 1,
+}
 
+            );
+        
+    
+            tile_layer_7ebd86ee318c36c99292a584e1e0bd89.addTo(map_ae868a9c76d39b7970b2d089047f542e);
+        
+    
+            var circle_6a8a9f7d3cd727c2b52813ff094cba8b = L.circle(
+                [12.522252700000001, 76.90546866666666],
+                {"bubblingMouseEvents": true, "color": "red", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "red", "fillOpacity": 0.5, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 25, "stroke": true, "weight": 3}
+            ).addTo(map_ae868a9c76d39b7970b2d089047f542e);
+        
+    
+        var popup_75f52e7731ddcf9ef51d3ce807dda6be = L.popup({
+  "maxWidth": 300,
+});
 
-    # ========================================================
-    # INJECT LIVE SYSTEM
-    # ========================================================
+        
+            
+                var html_7b22356e5960d2b2a9e0acc9fcbf50ff = $(`<div id="html_7b22356e5960d2b2a9e0acc9fcbf50ff" style="width: 100.0%; height: 100.0%;">             <div style="font-family:Arial;">                 <h4 style="margin:0;color:#c62828;">                     🚨 Danger Zone 0                 </h4>                  <b>Events:</b>                 3                  <br>                  <b>Vehicles involved:</b>                 1                  <br>                  <b>Average brake force:</b>                 10.53             </div>             </div>`)[0];
+                popup_75f52e7731ddcf9ef51d3ce807dda6be.setContent(html_7b22356e5960d2b2a9e0acc9fcbf50ff);
+            
+        
 
-    if "</body>" not in html:
+        circle_6a8a9f7d3cd727c2b52813ff094cba8b.bindPopup(popup_75f52e7731ddcf9ef51d3ce807dda6be)
+        ;
 
-        raise RuntimeError(
-            "Generated Folium HTML does not contain </body>."
-        )
+        
+    
+    
+            var marker_5b3155ef26f1dee51d7342b906e37fa1 = L.marker(
+                [12.522252700000001, 76.90546866666666],
+                {
+}
+            ).addTo(map_ae868a9c76d39b7970b2d089047f542e);
+        
+    
+            var icon_e8276f8564842629dfcb84b96460a509 = L.AwesomeMarkers.icon(
+                {
+  "markerColor": "red",
+  "iconColor": "white",
+  "icon": "warning-sign",
+  "prefix": "glyphicon",
+  "extraClasses": "fa-rotate-0",
+}
+            );
+        
+    
+        var popup_f4f66233f232257073c9be87746f3ffc = L.popup({
+  "maxWidth": 300,
+});
 
+        
+            
+                var html_85cfd1e615a6505101138741de16475b = $(`<div id="html_85cfd1e615a6505101138741de16475b" style="width: 100.0%; height: 100.0%;">             <div style="font-family:Arial;">                 <h4 style="margin:0;color:#c62828;">                     🚨 Danger Zone 0                 </h4>                  <b>Events:</b>                 3                  <br>                  <b>Vehicles involved:</b>                 1                  <br>                  <b>Average brake force:</b>                 10.53             </div>             </div>`)[0];
+                popup_f4f66233f232257073c9be87746f3ffc.setContent(html_85cfd1e615a6505101138741de16475b);
+            
+        
 
-    html = html.replace(
-        "</body>",
-        live_code + "\n</body>",
-        1,
-    )
+        marker_5b3155ef26f1dee51d7342b906e37fa1.bindPopup(popup_f4f66233f232257073c9be87746f3ffc)
+        ;
 
-
-    # ========================================================
-    # WRITE FINAL DASHBOARD
-    # ========================================================
-
-    with open(
-        OUTPUT_HTML,
-        "w",
-        encoding="utf-8",
-    ) as file:
-
-        file.write(html)
-
-
-    print()
-
-    print(
-        "=============================================="
-    )
-
-    print(
-        f"✅ Saved LIVE dashboard -> {OUTPUT_HTML}"
-    )
-
-    print(
-        "=============================================="
-    )
-
-    print()
-
-    print(
-        "Start local server using:"
-    )
-
-    print(
-        "python -m http.server 8000"
-    )
-
-    print()
-
-    print(
-        "Then open:"
-    )
-
-    print(
-        "http://127.0.0.1:8000/dashboard_real.html"
-    )
-
-    print()
-
-
-# ============================================================
-# MAIN
-# ============================================================
-
-if __name__ == "__main__":
-    build_dashboard()
+        
+    
+    
+                marker_5b3155ef26f1dee51d7342b906e37fa1.setIcon(icon_e8276f8564842629dfcb84b96460a509);
+            
+    
+            map_ae868a9c76d39b7970b2d089047f542e.fitBounds(
+                [[12.5222494, 76.9054603], [12.5222556, 76.9054757]],
+                {"maxZoom": 16}
+            );
+        
+</script>
+</html>

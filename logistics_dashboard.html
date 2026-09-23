@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Smart Logistics Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+  <style>
+    :root { --ink:#17202a; --muted:#65717d; --line:#dce3e8; --paper:#f4f7f8; --white:#fff; --teal:#087f8c; --teal-dark:#075f69; --orange:#e8872f; --red:#c95050; --green:#27966f; --shadow:0 10px 30px rgba(23,32,42,.08); }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--ink); background:var(--paper); font-family:'DM Sans',sans-serif; }
+    header { background:#14343b; color:white; padding:22px clamp(18px,4vw,52px); display:flex; justify-content:space-between; align-items:center; gap:18px; }
+    h1,h2,h3 { font-family:'Space Grotesk',sans-serif; margin:0; }
+    h1 { font-size:clamp(22px,3vw,34px); }
+    header p { color:#a9c8cb; margin:5px 0 0; }
+    .back { color:white; text-decoration:none; border:1px solid #7ba5a8; border-radius:7px; padding:10px 14px; white-space:nowrap; }
+    main { max-width:1500px; margin:0 auto; padding:24px clamp(16px,3vw,44px) 50px; }
+    .overview { display:grid; grid-template-columns:repeat(5,1fr); gap:12px; margin-bottom:22px; }
+    .metric,.panel { background:var(--white); border:1px solid var(--line); border-radius:8px; box-shadow:var(--shadow); }
+    .metric { padding:17px; border-top:4px solid var(--teal); }
+    .metric:nth-child(2){border-top-color:var(--orange)} .metric:nth-child(3){border-top-color:#3a88a0} .metric:nth-child(4){border-top-color:var(--green)} .metric:nth-child(5){border-top-color:var(--red)}
+    .metric span { color:var(--muted); font-size:13px; } .metric strong { display:block; font-size:28px; margin-top:6px; }
+    .workspace { display:grid; grid-template-columns:minmax(320px,390px) 1fr; gap:18px; align-items:start; }
+    .panel { padding:20px; } .panel h2 { font-size:18px; margin-bottom:16px; } .panel h3 { font-size:15px; margin:20px 0 10px; }
+    label { display:block; color:var(--muted); font-size:12px; font-weight:600; margin:11px 0 5px; }
+    input,select { width:100%; padding:10px 11px; border:1px solid #cbd5da; border-radius:5px; font:inherit; color:var(--ink); background:white; }
+    .two { display:grid; grid-template-columns:1fr 1fr; gap:10px; } button { border:0; border-radius:5px; padding:11px 14px; font:600 14px 'DM Sans'; cursor:pointer; }
+    .primary { background:var(--teal); color:white; width:100%; margin-top:16px; } .primary:hover { background:var(--teal-dark); }
+    .hint { color:var(--muted); font-size:12px; line-height:1.5; margin:8px 0 0; }
+    .vehicle-list { display:grid; gap:8px; } .vehicle-option { border:1px solid var(--line); border-radius:6px; padding:10px; display:flex; justify-content:space-between; gap:10px; font-size:13px; }
+    .vehicle-option strong { display:block; } .vehicle-option small { color:var(--muted); } .available { color:var(--green); font-weight:700; } .transit { color:var(--orange); font-weight:700; }
+    .delivery-grid { display:grid; grid-template-columns:1fr 1fr; gap:18px; } #map { height:360px; border-radius:7px; border:1px solid var(--line); }
+    .route-summary { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-top:12px; } .route-summary div { background:#eef6f6; padding:10px; border-radius:5px; } .route-summary span { display:block; color:var(--muted); font-size:11px; } .route-summary b { font-size:14px; }
+    .tracking { margin-top:18px; } .tracking-top { display:flex; justify-content:space-between; gap:10px; align-items:center; } .status-pill { background:#e5f5ef; color:#187455; border-radius:20px; padding:6px 10px; font-weight:700; font-size:12px; }
+    .progress { height:12px; background:#e7ecee; border-radius:10px; overflow:hidden; margin:15px 0; } .progress i { display:block; height:100%; width:38%; background:var(--teal); transition:width .4s ease; }
+    .stages { display:grid; grid-template-columns:repeat(6,1fr); gap:5px; } .stage { text-align:center; font-size:10px; color:#849099; } .stage b { display:block; width:22px; height:22px; line-height:22px; margin:0 auto 5px; border-radius:50%; background:#e1e7e9; } .stage.done { color:var(--teal); } .stage.done b { background:var(--teal); color:white; }
+    .tracking-stats { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-top:12px; } .tracking-stats div { border-left:3px solid var(--teal); padding-left:9px; } .tracking-stats span { display:block; color:var(--muted); font-size:11px; }
+    .warning { display:none; background:#fff2e5; border:1px solid #f0bd83; color:#934b12; border-radius:6px; padding:11px; margin-top:12px; font-weight:700; }
+    .table-panel { margin-top:18px; overflow:hidden; padding:0; } .table-head { padding:18px 20px 0; } .table-wrap { overflow-x:auto; } table { width:100%; border-collapse:collapse; min-width:850px; font-size:13px; } th,td { text-align:left; padding:13px 18px; border-bottom:1px solid var(--line); white-space:nowrap; } th { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.05em; background:#fbfcfc; } td progress { width:90px; accent-color:var(--teal); vertical-align:middle; }
+    .tag { border-radius:14px; padding:4px 8px; font-size:11px; font-weight:700; } .tag.in-transit { background:#e3f2f5; color:#166b78; } .tag.pending { background:#fff0dc; color:#955719; } .tag.delivered { background:#e2f4ec; color:#167152; } .tag.delayed { background:#fde6e6; color:#a03e3e; }
+    .toast { position:fixed; right:18px; bottom:18px; background:#14343b; color:white; padding:12px 16px; border-radius:6px; display:none; box-shadow:var(--shadow); }
+    .alert-button { position:fixed; left:18px; bottom:18px; z-index:1000; background:#c95050; color:white; box-shadow:var(--shadow); }
+    .alert-button.active { animation:alertPulse 1.2s infinite; }
+    @keyframes alertPulse { 50% { box-shadow:0 0 0 8px rgba(201,80,80,.18),var(--shadow); } }
+    #alertPanel { display:none; position:fixed; left:18px; bottom:68px; z-index:1000; width:min(390px,calc(100vw - 36px)); max-height:55vh; overflow:auto; background:white; border:1px solid #efb3b3; border-radius:8px; box-shadow:var(--shadow); padding:16px; }
+    #alertPanel h2 { color:#a33c3c; font-size:18px; margin:0 0 10px; }
+    .alert-item { border-left:4px solid var(--red); background:#fff2f2; border-radius:5px; padding:10px; margin-top:8px; font-size:13px; }
+    .firebase-status { color:#a9c8cb; font-size:12px; margin-top:4px; }
+    @media (max-width:1000px) { .overview { grid-template-columns:repeat(3,1fr); } .workspace,.delivery-grid { grid-template-columns:1fr; } }
+    @media (max-width:600px) { header { align-items:flex-start; flex-direction:column; } .overview { grid-template-columns:repeat(2,1fr); } .metric strong { font-size:23px; } .two,.route-summary,.tracking-stats { grid-template-columns:1fr 1fr; } .stages { grid-template-columns:repeat(3,1fr); row-gap:10px; } #map { height:290px; } }
+  </style>
+</head>
+<body>
+  <header><div><h1>Smart Goods Transportation</h1><p>Logistics control tower · local demo mode</p><div class="firebase-status" id="firebaseStatus">🟡 Connecting to vehicle alerts...</div></div><a class="back" href="live_dashboard.html">← Back to Location Dashboard</a></header>
+  <button class="alert-button" id="alertButton" type="button">🚨 Alerts (0)</button>
+  <aside id="alertPanel"><h2>Vehicle accident alerts</h2><div id="alertList">No accident alerts received.</div></aside>
+  <main>
+    <section class="overview" id="overview"></section>
+    <div class="workspace">
+      <section class="panel">
+        <h2>Create shipment</h2>
+        <form id="shipmentForm">
+          <label for="shipmentId">Shipment ID</label><input id="shipmentId" required placeholder="SHP-2026-0042">
+          <label for="goods">Type of goods</label><input id="goods" required placeholder="Medical supplies">
+          <div class="two"><div><label for="weight">Weight (kg)</label><input id="weight" type="number" min="0.1" step="0.1" required></div><div><label for="quantity">Quantity</label><input id="quantity" type="number" min="1" step="1" required></div></div>
+          <label for="pickup">Pickup location</label><input id="pickup" required placeholder="Mandya Warehouse">
+          <label for="destination">Destination location</label><input id="destination" required placeholder="Mysuru City Centre">
+          <div class="two"><div><label for="pickupTime">Pickup date/time</label><input id="pickupTime" type="datetime-local" required></div><div><label for="deliveryTime">Expected delivery</label><input id="deliveryTime" type="datetime-local" required></div></div>
+          <label for="priority">Priority</label><select id="priority"><option>Normal</option><option>High</option><option>Urgent</option></select>
+          <button class="primary" type="submit">Create &amp; assign shipment</button>
+          <p class="hint">Vehicle assignment is capacity-checked. A vehicle is never assigned when its capacity is below the cargo weight.</p>
+        </form>
+        <h3>Available fleet</h3><div class="vehicle-list" id="vehicleList"></div>
+      </section>
+      <section>
+        <div class="panel"><h2>Route and delivery details <small id="routeMode">Demo route mode</small></h2><div id="map"></div><div class="route-summary" id="routeSummary"></div></div>
+        <div class="panel tracking"><div class="tracking-top"><h2>Live shipment tracking</h2><span class="status-pill" id="trackingStatus">IN TRANSIT</span></div><div class="progress"><i id="progressBar"></i></div><div class="stages" id="stages"></div><div class="tracking-stats" id="trackingStats"></div><div class="warning" id="delayWarning">⚠️ Potential Delivery Delay Detected</div><button class="primary" id="simulateBtn" type="button">Simulate vehicle movement</button></div>
+      </section>
+    </div>
+    <section class="panel table-panel"><div class="table-head"><h2>Shipment table</h2></div><div class="table-wrap"><table><thead><tr><th>Shipment ID</th><th>Goods</th><th>Pickup</th><th>Destination</th><th>Vehicle</th><th>Status</th><th>Progress</th><th>ETA</th></tr></thead><tbody id="shipmentRows"></tbody></table></div></section>
+  </main><div class="toast" id="toast"></div>
+  <script>
+    const fleet = [
+      { id:'BIKE-07', type:'Bike', capacity:25, status:'Available' },
+      { id:'VAN-12', type:'Van', capacity:450, status:'Available' },
+      { id:'TRUCK-04', type:'Truck', capacity:2500, status:'In Transit' },
+      { id:'VAN-18', type:'Van', capacity:800, status:'Available' }
+    ];
+    const firebaseConfig = {
+      apiKey:'AIzaSyDb14lZDrU4XASL2IQB3GE4QxIlpobUkdY',
+      authDomain:'road-safety-hackathon-16b7d.firebaseapp.com',
+      databaseURL:'https://road-safety-hackathon-16b7d-default-rtdb.firebaseio.com/',
+      projectId:'road-safety-hackathon-16b7d',
+      storageBucket:'road-safety-hackathon-16b7d.firebasestorage.app',
+      messagingSenderId:'697637294869',
+      appId:'1:697637294869:web:ff212611521af2bdcecf1c'
+    };
+    const stages = ['ORDER CREATED','VEHICLE ASSIGNED','GOODS PICKED UP','IN TRANSIT','NEAR DESTINATION','DELIVERED'];
+    const demo = [
+      { id:'SHP-2026-0038', goods:'Fertilizer bags', pickup:'Mandya Depot', destination:'Mysuru North', vehicle:'TRUCK-04', status:'In Transit', progress:64, eta:'Today, 17:40', weight:1200, distance:47, duration:72 },
+      { id:'SHP-2026-0039', goods:'Fresh produce', pickup:'Srirangapatna', destination:'Mandya Market', vehicle:'VAN-12', status:'Pending', progress:0, eta:'Tomorrow, 08:30', weight:280, distance:22, duration:38 },
+      { id:'SHP-2026-0040', goods:'Textile cartons', pickup:'Mysuru Hub', destination:'Bengaluru East', vehicle:'VAN-18', status:'Delivered', progress:100, eta:'Delivered 11:20', weight:610, distance:142, duration:185 }
+    ];
+    let shipments = JSON.parse(localStorage.getItem('logistics_shipments') || 'null') || demo;
+    let selectedShipment = shipments[0];
+    let marker = null;
+    let routeLine = null;
+    let simulationTimer = null;
+    let accidentAlerts = [];
+    const map = L.map('map').setView([12.65, 76.95], 9);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution:'&copy; OpenStreetMap contributors' }).addTo(map);
+    const origin = [12.52225,76.90546], destination = [12.9716,77.5946];
+    routeLine = L.polyline([origin,destination], { color:'#087f8c', weight:5, dashArray:'10 8' }).addTo(map);
+    L.marker(origin).addTo(map).bindPopup('Demo pickup location'); L.marker(destination).addTo(map).bindPopup('Demo destination'); map.fitBounds(routeLine.getBounds(), { padding:[20,20] });
+    function esc(value) { return String(value).replace(/[&<>"']/g, function(c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+    function toast(message) { const el=document.getElementById('toast'); el.textContent=message; el.style.display='block'; setTimeout(()=>el.style.display='none',2600); }
+    function escapeHtml(value) { return String(value).replace(/[&<>"']/g, function(c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+    function showAccidentAlert(snapshot) {
+      const event = snapshot.val() || {};
+      const magnitude = Number(event.magnitude || 0);
+      if (magnitude <= 20 && event.severity !== 'HIGH' && event.type !== 'ACCIDENT') return;
+      const alert = { key:snapshot.key, car:event.car_id || event.carId || event.deviceId || 'Unknown vehicle', magnitude, lat:event.latitude ?? event.lat, lon:event.longitude ?? event.lon, time:event.timestamp || new Date().toISOString() };
+      if (accidentAlerts.some(item => item.key === alert.key)) return;
+      accidentAlerts.unshift(alert);
+      accidentAlerts = accidentAlerts.slice(0, 20);
+      document.getElementById('alertButton').textContent = '🚨 Alerts (' + accidentAlerts.length + ')';
+      document.getElementById('alertButton').classList.add('active');
+      document.getElementById('alertList').innerHTML = accidentAlerts.map(item => '<div class="alert-item"><b>🚨 ACCIDENT DETECTED</b><br>Vehicle: ' + escapeHtml(item.car) + '<br>Magnitude: ' + item.magnitude.toFixed(2) + '<br>Location: ' + escapeHtml(item.lat) + ', ' + escapeHtml(item.lon) + '<br>Time: ' + escapeHtml(item.time) + '</div>').join('');
+      const shipment = shipments.find(item => item.vehicle === alert.car);
+      if (shipment && shipment.status !== 'Delivered') { shipment.status = 'Delayed'; save(); renderAll(); }
+      if ('Notification' in window && Notification.permission === 'granted') new Notification('Road Safety Accident Alert', { body: alert.car + ' reported an accident. Magnitude ' + alert.magnitude.toFixed(2) });
+      toast('Accident alert received for ' + alert.car);
+    }
+    function startVehicleAlerts() {
+      try {
+        firebase.initializeApp(firebaseConfig);
+        const alertDb = firebase.database();
+        alertDb.ref('.info/connected').on('value', snapshot => { document.getElementById('firebaseStatus').textContent = snapshot.val() === true ? '🟢 Firebase LIVE · monitoring all vehicles' : '🔴 Firebase offline'; });
+        alertDb.ref('events').on('child_added', showAccidentAlert, () => { document.getElementById('firebaseStatus').textContent = '🔴 Vehicle alert connection error'; });
+      } catch (error) { document.getElementById('firebaseStatus').textContent = '🔴 Firebase unavailable'; }
+    }
+    function save() { localStorage.setItem('logistics_shipments', JSON.stringify(shipments)); }
+    function renderOverview() { const counts={total:shipments.length,pending:0,transit:0,delivered:0,delayed:0}; shipments.forEach(s=>{ if(s.status==='Pending')counts.pending++; if(s.status==='In Transit')counts.transit++; if(s.status==='Delivered')counts.delivered++; if(s.status==='Delayed')counts.delayed++; }); document.getElementById('overview').innerHTML=[['Total Shipments',counts.total],['Pending Shipments',counts.pending],['In Transit',counts.transit],['Delivered',counts.delivered],['Delayed Shipments',counts.delayed]].map(x=>'<div class="metric"><span>'+x[0]+'</span><strong>'+x[1]+'</strong></div>').join(''); }
+    function renderFleet() { document.getElementById('vehicleList').innerHTML=fleet.map(v=>'<div class="vehicle-option"><div><strong>'+v.id+' · '+v.type+'</strong><small>Capacity: '+v.capacity+' kg</small></div><span class="'+(v.status==='Available'?'available':'transit')+'">'+v.status+'</span></div>').join(''); }
+    function renderTable() { document.getElementById('shipmentRows').innerHTML=shipments.map((s,i)=>'<tr><td><b>'+esc(s.id)+'</b></td><td>'+esc(s.goods)+'</td><td>'+esc(s.pickup)+'</td><td>'+esc(s.destination)+'</td><td>'+esc(s.vehicle)+'</td><td><span class="tag '+s.status.toLowerCase().replace(' ','-')+'">'+s.status+'</span></td><td><progress value="'+s.progress+'" max="100"></progress> '+s.progress+'%</td><td>'+esc(s.eta)+'</td></tr>').join(''); }
+    function renderTracking() { const s=selectedShipment; document.getElementById('trackingStatus').textContent=s.status.toUpperCase(); document.getElementById('progressBar').style.width=s.progress+'%'; document.getElementById('stages').innerHTML=stages.map((stage,i)=>'<div class="stage '+(i <= Math.floor(s.progress/20) ? 'done':'')+'"><b>'+(i <= Math.floor(s.progress/20) ? '✓':i+1)+'</b>'+stage+'</div>').join(''); const remaining=Math.max(0,Math.round(s.distance*(1-s.progress/100))); document.getElementById('trackingStats').innerHTML=[['Current vehicle location',s.progress+'% along route'],['Total distance',s.distance+' km'],['Distance travelled',Math.round(s.distance*s.progress/100)+' km'],['Remaining distance',remaining+' km'],['Estimated time remaining',Math.max(0,Math.round(s.duration*(1-s.progress/100)))+' min'],['Assigned vehicle',s.vehicle],['Current status',s.status],['Expected delivery',s.eta]].map(x=>'<div><span>'+x[0]+'</span><b>'+esc(x[1])+'</b></div>').join(''); document.getElementById('routeSummary').innerHTML=[['Pickup location',s.pickup],['Destination',s.destination],['Route','Simulated road route'],['Total distance',s.distance+' km'],['Estimated travel time',s.duration+' min'],['Estimated delivery time',s.eta],['Assigned vehicle',s.vehicle]].map(x=>'<div><span>'+x[0]+'</span><b>'+esc(x[1])+'</b></div>').join(''); document.getElementById('delayWarning').style.display=s.status==='Delayed'?'block':'none'; }
+    function renderAll() { renderOverview(); renderFleet(); renderTable(); renderTracking(); }
+    function assignVehicle(weight) { return fleet.filter(v=>v.status==='Available' && v.capacity>=weight).sort((a,b)=>a.capacity-b.capacity)[0]; }
+    function simulate() { if(!selectedShipment || selectedShipment.status==='Delivered') return toast('This shipment is already delivered.'); selectedShipment.status='In Transit'; selectedShipment.progress=Math.min(100,selectedShipment.progress+8); if(selectedShipment.progress>=100){selectedShipment.progress=100;selectedShipment.status='Delivered';selectedShipment.eta='Delivered just now';clearInterval(simulationTimer);simulationTimer=null;toast('Shipment delivered.');} else {selectedShipment.eta='ETA in '+Math.max(1,Math.round(selectedShipment.duration*(1-selectedShipment.progress/100)))+' min';toast('Vehicle location updated.');} save(); renderAll(); }
+    document.getElementById('simulateBtn').addEventListener('click',function(){ if(!simulationTimer) simulationTimer=setInterval(simulate,1200); simulate(); });
+    document.getElementById('alertButton').addEventListener('click',function(){ const panel=document.getElementById('alertPanel'); panel.style.display=panel.style.display==='block'?'none':'block'; if('Notification' in window && Notification.permission==='default') Notification.requestPermission(); });
+    document.getElementById('shipmentForm').addEventListener('submit',function(event){ event.preventDefault(); const weight=Number(document.getElementById('weight').value); const vehicle=assignVehicle(weight); if(!vehicle){toast('No available vehicle has enough capacity for this cargo.');return;} const id=document.getElementById('shipmentId').value.trim(); if(shipments.some(s=>s.id===id)){toast('Shipment ID already exists.');return;} const pickup=document.getElementById('pickup').value.trim(), dest=document.getElementById('destination').value.trim(); const newShipment={id,goods:document.getElementById('goods').value.trim(),pickup,destination:dest,vehicle:vehicle.id,status:'Pending',progress:0,eta:document.getElementById('deliveryTime').value.replace('T',' '),weight,distance:35,duration:60}; shipments.unshift(newShipment); selectedShipment=newShipment; save(); renderAll(); toast(vehicle.id+' assigned safely.'); this.reset(); });
+    renderAll();
+    startVehicleAlerts();
+  </script>
+</body>
+</html>

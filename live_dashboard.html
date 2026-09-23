@@ -27,11 +27,43 @@
 
     #resetBtn {
       position: fixed; top: 14px; right: 14px; z-index: 9999;
-      padding: 10px 18px; background: #d9534f; color: white;
+      padding: 10px 18px; background: #337ab7; color: white;
       border: none; border-radius: 8px; font-size: 14px; cursor: pointer;
       box-shadow: 0 4px 14px rgba(0,0,0,0.3);
     }
-    #resetBtn:hover { background: #c9302c; }
+    #resetBtn:hover { background: #286090; }
+
+    #suggestRouteBtn {
+      position: fixed; top: 62px; right: 14px; z-index: 9999;
+      padding: 10px 18px; background: #5cb85c; color: white;
+      border: none; border-radius: 8px; font-size: 14px; cursor: pointer;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.3);
+    }
+    #suggestRouteBtn:hover { background: #449d44; }
+    #suggestRouteBtn:disabled { background: #777; cursor: wait; }
+
+    #logisticsBtn {
+      position: fixed; top: 110px; right: 14px; z-index: 9999;
+      padding: 10px 18px; background: #6f42c1; color: white;
+      border: none; border-radius: 8px; font-size: 14px; cursor: pointer;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.3);
+    }
+    #logisticsBtn:hover { background: #59339d; }
+
+    #routePanel {
+      display: none; position: fixed; top: 110px; right: 14px; z-index: 9999;
+      background: white; color: #222; padding: 14px; border-radius: 10px;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.35); width: 340px;
+      max-height: 72vh; overflow-y: auto; font-size: 13px;
+    }
+    #routePanel h3 { margin: 0 0 8px; color: #337ab7; font-size: 16px; }
+    .route-card { border-left: 5px solid #5cb85c; background: #f5f5f5; padding: 9px; margin-top: 8px; border-radius: 5px; }
+    .route-card.medium { border-left-color: #f0ad4e; }
+    .route-card.high { border-left-color: #d9534f; }
+    .route-card.selected { outline: 3px solid #337ab7; }
+    .route-card button { margin-top: 8px; padding: 7px 10px; border: 0; border-radius: 5px; background: #337ab7; color: white; cursor: pointer; }
+    .route-card ol { margin: 7px 0 0 20px; padding: 0; }
+    .route-card li { margin: 4px 0; }
 
     .zone-popup h4 { margin: 0 0 6px 0; }
     .zone-popup .vehicle {
@@ -99,7 +131,10 @@
     <div id="pipelineFeed"><div class="idle">Waiting for events...</div></div>
   </div>
 
-  <button id="resetBtn" onclick="resetZones()">Reset Zones</button>
+  <button id="resetBtn" onclick="resetZoneToCurrentLocation()">Reset Zone / Use My Location</button>
+  <button id="suggestRouteBtn" onclick="suggestAlternativeRoutes()">Suggest Alternative Route</button>
+  <button id="logisticsBtn" onclick="window.location.href='logistics_dashboard.html'">Logistics</button>
+  <div id="routePanel"></div>
 
   <div id="map"></div>
 
@@ -133,6 +168,13 @@
     // {lat, lon, events: [...], circle}
     var zones = [];
     var firstEventCentered = false;
+    var currentLocationMarker = null;
+    var currentLocationAccuracy = null;
+    var routeLayers = [];
+    var routeOptions = [];
+    var navigationWatchId = null;
+    var navigationStepIndex = 0;
+    var navigationMarker = null;
 
     // Prevent the same Firebase event from being inserted twice.
     var processedEventIds = new Set();
@@ -599,6 +641,277 @@
         totalEvents > 0 ? 'Live' : 'Waiting for phones...';
     }
 
+    function clearRouteLayers() {
+      routeLayers.forEach(function(layer) { map.removeLayer(layer); });
+      routeLayers = [];
+      routeOptions = [];
+    }
+
+    function routeRisk(routeCoordinates) {
+      var nearbyEvents = 0;
+      var highEvents = 0;
+      zones.forEach(function(zone) {
+        var nearRoute = routeCoordinates.some(function(point) {
+          return haversineMeters(zone.lat, zone.lon, point[0], point[1]) <= 300;
+        });
+        if (nearRoute) {
+          nearbyEvents += zone.events.length;
+          zone.events.forEach(function(event) {
+            if (safeNumber(event.magnitude, 0) > 20) highEvents += 1;
+          });
+        }
+      });
+      if (highEvents > 0 || nearbyEvents >= 3) {
+        return { label: 'HIGH', className: 'high', details: nearbyEvents + ' nearby event(s), including ' + highEvents + ' high-severity event(s)' };
+      }
+      if (nearbyEvents > 0) {
+        return { label: 'MEDIUM', className: 'medium', details: nearbyEvents + ' nearby event(s) within 300 m' };
+      }
+      return { label: 'LOW', className: '', details: 'No live danger zones within 300 m' };
+    }
+
+    function formatDuration(seconds) {
+      var minutes = Math.round(seconds / 60);
+      if (minutes < 60) return minutes + ' min';
+      return Math.floor(minutes / 60) + ' hr ' + (minutes % 60) + ' min';
+    }
+
+    function describeStep(step) {
+      var name = step.name ? ' on ' + step.name : '';
+      var distance = step.distance >= 1000
+        ? (step.distance / 1000).toFixed(1) + ' km'
+        : Math.round(step.distance) + ' m';
+      var maneuver = step.maneuver || {};
+      var type = maneuver.type || 'Continue';
+      var modifier = maneuver.modifier ? ' ' + maneuver.modifier : '';
+      var instruction = type === 'depart' ? 'Start' :
+        type === 'arrive' ? 'Arrive at destination' :
+        type === 'roundabout' ? 'Enter roundabout' :
+        type.charAt(0).toUpperCase() + type.slice(1) + modifier;
+      return instruction + name + ' (' + distance + ')';
+    }
+
+    function selectRoute(index) {
+      var selected = routeOptions[index];
+      if (!selected) return;
+      routeLayers.forEach(function(layer, layerIndex) {
+        layer.setStyle({
+          weight: layerIndex === index ? 8 : 4,
+          opacity: layerIndex === index ? 1 : 0.45
+        });
+      });
+      document.querySelectorAll('.route-card').forEach(function(card, cardIndex) {
+        card.classList.toggle('selected', cardIndex === index);
+      });
+      map.fitBounds(selected.layer.getBounds(), { padding: [40, 40] });
+      var message = selected.steps.map(describeStep).join('. ');
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+        var speech = new SpeechSynthesisUtterance(
+          'Selected route ' + (index + 1) + '. ' +
+          selected.risk.label + ' risk. Estimated time ' +
+          formatDuration(selected.route.duration) + '. ' + message
+        );
+        speech.rate = 0.95;
+        window.speechSynthesis.speak(speech);
+      }
+      document.getElementById('status').innerText =
+        'Route ' + (index + 1) + ' selected.';
+    }
+
+    function startNavigation(index) {
+      selectRoute(index);
+      if (!navigator.geolocation) {
+        alert('Location tracking is not supported by this browser.');
+        return;
+      }
+      var selected = routeOptions[index];
+      if (navigationWatchId !== null) navigator.geolocation.clearWatch(navigationWatchId);
+      navigationStepIndex = 0;
+      var announce = function(text) {
+        if ('speechSynthesis' in window) {
+          window.speechSynthesis.cancel();
+          window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+        }
+      };
+      announce('Navigation started. ' + describeStep(selected.steps[0]));
+      navigationWatchId = navigator.geolocation.watchPosition(function(position) {
+        var lat = position.coords.latitude;
+        var lon = position.coords.longitude;
+        map.setView([lat, lon], 17);
+        if (navigationMarker) map.removeLayer(navigationMarker);
+        navigationMarker = L.marker([lat, lon]).addTo(map).bindPopup('You are here').openPopup();
+        var nextStep = selected.steps[navigationStepIndex];
+        if (!nextStep || !nextStep.maneuver || !nextStep.maneuver.location) return;
+        var stepLon = nextStep.maneuver.location[0];
+        var stepLat = nextStep.maneuver.location[1];
+        if (haversineMeters(lat, lon, stepLat, stepLon) <= 60) {
+          announce(describeStep(nextStep));
+          navigationStepIndex += 1;
+          if (navigationStepIndex >= selected.steps.length) {
+            navigator.geolocation.clearWatch(navigationWatchId);
+            navigationWatchId = null;
+            announce('You have arrived at your destination.');
+          }
+        }
+      }, function(error) {
+        alert('Navigation location error: ' + error.message);
+      }, { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 });
+      document.getElementById('status').innerText = 'Tracking your location with voice directions.';
+    }
+
+    async function showMandyaDemoRoutes(startLat, startLon, panel) {
+      var routeBase = 'https://router.project-osrm.org/route/v1/driving/';
+      var destinations = [
+        { label: 'Fastest - HIGH Risk', name: 'Mandya City Court Complex / DC Office, Mandya / RTO Mandya', point: [76.9187, 12.5224], minutes: 59, distance: '69.9 km', risk: { label: 'HIGH', className: 'high', details: '10 nearby event(s), including 2 high-severity event(s)' }, directions: ['Start from Adichunchanagiri University, BG Nagara', 'Join Bangalore-Mangalore Highway', 'Continue towards Bellur Cross', 'Take the route towards Nagamangala', 'Continue through the Nagamangala corridor', 'Merge onto the main road towards Mandya', 'Continue towards the Mandya outskirts', 'Enter Mandya city', 'Follow the route via RTO Road', 'Pass the DC Office / District Court area', 'Continue towards Mandya city centre', 'Follow the remaining route to the destination'] },
+        { label: 'Alternative - LOW Risk', name: 'KSRTC Bus Stand Mandya', point: [76.8954, 12.5217], minutes: 70, distance: '~67 km', risk: { label: 'LOW', className: '', details: '3 nearby event(s), no high-severity events' }, directions: ['Start from Adichunchanagiri University, BG Nagara', 'Take NH-75 towards Bellur Cross', 'Continue through the alternative local road towards Nagamangala', 'Follow the route towards Mandya', 'Avoid the high-risk event cluster on the primary route', 'Continue via the lower-risk road section', 'Enter Mandya through the city outskirts', 'Follow directions towards Shankar Pura', 'Reach KSRTC Bus Stand, Mandya'] }
+      ];
+      var responses = await Promise.all(destinations.map(function(item) {
+        var points = startLon + ',' + startLat + ';' + item.point.join(',');
+        return fetch(routeBase + points + '?steps=true&overview=full&geometries=geojson')
+          .then(function(response) { return response.ok ? response.json() : {}; })
+          .then(function(data) { return { item: item, route: data.routes && data.routes[0] }; });
+      }));
+      var valid = responses.filter(function(response) { return response.route; });
+      if (!valid.length) throw new Error('The Mandya demo routes could not be loaded.');
+      clearRouteLayers();
+      var bounds = [];
+      routeOptions = [];
+      var routeHtml = '<h3>2 route(s) identified for Mandya Bus Stand</h3><p><b>Recommended:</b> Route 2 is the LOW-risk alternative.</p>';
+      responses.forEach(function(response, index) {
+        var item = response.item;
+        var route = response.route || (valid[0] && valid[0].route);
+        if (!route) return;
+        var coordinates = route.geometry.coordinates.map(function(point) { return [point[1], point[0]]; });
+        var steps = route.legs.reduce(function(all, leg) { return all.concat(leg.steps); }, []);
+        var layer = L.polyline(coordinates, { color: item.risk.label === 'HIGH' ? '#d9534f' : '#27966f', weight: index === 1 ? 8 : 5, opacity: 0.85, dashArray: index === 1 ? null : '10 8' }).addTo(map).bindPopup('<b>Route ' + (index + 1) + '</b><br>' + item.risk.label + ' risk<br>' + item.minutes + ' min');
+        routeLayers.push(layer);
+        routeOptions.push({ route: route, risk: item.risk, steps: steps, layer: layer });
+        coordinates.forEach(function(point) { bounds.push(point); });
+        routeHtml += '<div class="route-card ' + item.risk.className + '"><b>Route ' + (index + 1) + ' (' + item.label + ')</b><br><b>Destination:</b> ' + item.name + '<br><b>Estimated:</b> ' + (item.minutes === 70 ? '1 hr 10 min' : item.minutes + ' min') + ' · ' + item.distance + '<br><b>Risk: ' + (item.risk.label === 'LOW' ? '🟢 LOW' : '🔴 HIGH') + '</b><br>' + item.risk.details + '<br><button type="button" onclick="startNavigation(' + index + ')">Start directions &amp; track me</button><ol>';
+        item.directions.forEach(function(direction) { routeHtml += '<li>' + direction + '</li>'; });
+        routeHtml += '</ol></div>';
+      });
+      map.fitBounds(bounds, { padding: [40, 40] });
+      panel.innerHTML = routeHtml + '<p><b>Recommended:</b> Route 2 (LOW risk). This is a local demo scenario based on the supplied Mandya safety data.</p>';
+      document.getElementById('status').innerText = 'Two Mandya routes found. Route 2 is the safer alternative.';
+    }
+
+    async function suggestAlternativeRoutes() {
+      var button = document.getElementById('suggestRouteBtn');
+      var panel = document.getElementById('routePanel');
+      if (!navigator.geolocation) {
+        alert('Location is not supported by this browser.');
+        return;
+      }
+      var destination = prompt('Enter your destination (place, address, or landmark):');
+      if (!destination || !destination.trim()) return;
+      button.disabled = true;
+      button.innerText = 'Finding routes...';
+      panel.style.display = 'block';
+      panel.innerHTML = '<h3>Alternative routes</h3><p>Requesting your current location...</p>';
+      try {
+        var position = await new Promise(function(resolve, reject) {
+          navigator.geolocation.getCurrentPosition(resolve, reject, {
+            enableHighAccuracy: true, timeout: 15000, maximumAge: 0
+          });
+        });
+        var startLat = position.coords.latitude;
+        var startLon = position.coords.longitude;
+        map.setView([startLat, startLon], 14);
+        var destinationText = destination.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+        if (destinationText.indexOf('mandya') !== -1 && destinationText.indexOf('bus') !== -1 && destinationText.indexOf('stand') !== -1) {
+          await showMandyaDemoRoutes(startLat, startLon, panel);
+          return;
+        }
+        var searchResponse = await fetch(
+          'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=' + encodeURIComponent(destination)
+        );
+        var places = await searchResponse.json();
+        if (!places.length) throw new Error('Destination not found. Try a nearby town, landmark, or full address.');
+        var endLat = Number(places[0].lat);
+        var endLon = Number(places[0].lon);
+        var routeBase = 'https://router.project-osrm.org/route/v1/driving/';
+        var midLat = (startLat + endLat) / 2;
+        var midLon = (startLon + endLon) / 2;
+        var latOffset = Math.max(0.01, Math.abs(endLon - startLon) * 0.04);
+        var lonOffset = Math.max(0.01, Math.abs(endLat - startLat) * 0.04);
+        var detourSeeds = [
+          [midLon + lonOffset, midLat + latOffset],
+          [midLon - lonOffset, midLat - latOffset]
+        ];
+        var snappedDetours = await Promise.all(detourSeeds.map(function(point) {
+          return fetch('https://router.project-osrm.org/nearest/v1/driving/' + point.join(','))
+            .then(function(response) { return response.ok ? response.json() : null; })
+            .then(function(data) {
+              return data && data.waypoints && data.waypoints[0]
+                ? data.waypoints[0].location
+                : point;
+            })
+            .catch(function() { return point; });
+        }));
+        var routeQueries = [
+          { label: 'Fastest', points: [[startLon, startLat], [endLon, endLat]], suffix: '&alternatives=true' },
+          { label: 'Northern detour', points: [[startLon, startLat], snappedDetours[0], [endLon, endLat]], suffix: '' },
+          { label: 'Southern detour', points: [[startLon, startLat], snappedDetours[1], [endLon, endLat]], suffix: '' }
+        ];
+        var routeResponses = await Promise.all(routeQueries.map(function(query) {
+          var points = query.points.map(function(point) { return point.join(','); }).join(';');
+          return fetch(routeBase + points + '?steps=true&overview=full&geometries=geojson' + query.suffix)
+            .then(function(response) { return response.ok ? response.json() : {}; })
+            .then(function(data) { return { label: query.label, data: data }; });
+        }));
+        var allRoutes = [];
+        var routeSignatures = {};
+        routeResponses.forEach(function(response) {
+          if (!response.data.routes) return;
+          response.data.routes.forEach(function(route) {
+            var signature = route.geometry.coordinates.slice(0, 8).map(function(point) {
+              return point.join(',');
+            }).join('|');
+            if (!routeSignatures[signature]) {
+              routeSignatures[signature] = true;
+              route.routeLabel = response.label;
+              allRoutes.push(route);
+            }
+          });
+        });
+        if (!allRoutes.length) throw new Error('No driving route was found.');
+        clearRouteLayers();
+        var bounds = [];
+        var routeHtml = '<h3>' + allRoutes.length + ' route(s) to ' + places[0].display_name + '</h3>';
+        allRoutes.forEach(function(route, index) {
+          var coordinates = route.geometry.coordinates.map(function(point) { return [point[1], point[0]]; });
+          var risk = routeRisk(coordinates);
+          var steps = route.legs.reduce(function(all, leg) { return all.concat(leg.steps); }, []);
+          var layer = L.polyline(coordinates, {
+            color: risk.label === 'HIGH' ? '#d9534f' : risk.label === 'MEDIUM' ? '#f0ad4e' : '#337ab7',
+            weight: index === 0 ? 7 : 5, opacity: 0.82, dashArray: index === 0 ? null : '10 8'
+          }).addTo(map).bindPopup('<b>Route ' + (index + 1) + '</b><br>Risk: ' + risk.label + '<br>Duration: ' + formatDuration(route.duration));
+          routeLayers.push(layer);
+          routeOptions.push({ route: route, risk: risk, steps: steps, layer: layer });
+          coordinates.forEach(function(point) { bounds.push(point); });
+          routeHtml += '<div class="route-card ' + risk.className + '"><b>Route ' + (index + 1) + ' (' + route.routeLabel + ')</b> - ' + formatDuration(route.duration) + ', ' + (route.distance / 1000).toFixed(1) + ' km<br><b>Risk: ' + risk.label + '</b><br>' + risk.details + '<br><button type="button" onclick="startNavigation(' + index + ')">Start directions &amp; track me</button><ol>';
+          steps.slice(0, 12).forEach(function(step) { routeHtml += '<li>' + describeStep(step) + '</li>'; });
+          if (steps.length > 12) routeHtml += '<li>Continue following the route for the remaining directions.</li>';
+          routeHtml += '</ol></div>';
+        });
+        var safestIndex = routeOptions.reduce(function(best, option, index, options) {
+          var rank = { LOW: 0, MEDIUM: 1, HIGH: 2 };
+          return rank[option.risk.label] < rank[options[best].risk.label] ? index : best;
+        }, 0);
+        map.fitBounds(bounds, { padding: [40, 40] });
+        panel.innerHTML = routeHtml + '<p><b>Safest available:</b> Route ' + (safestIndex + 1) + ' (' + routeOptions[safestIndex].risk.label + ' risk). Select a route to start voice guidance.</p>';
+        document.getElementById('status').innerText = 'Routes found. Risk uses live danger zones.';
+      } catch (error) {
+        panel.innerHTML = '<h3>Alternative routes</h3><p>' + error.message + '</p>';
+        alert(error.message);
+      } finally {
+        button.disabled = false;
+        button.innerText = 'Suggest Alternative Route';
+      }
+    }
+
     // ---- LIVE Firebase listener ----
     // child_added fires immediately when a new event is written.
     db.ref('events').on('child_added', function(snapshot) {
@@ -615,35 +928,59 @@
       }
     });
 
-    // ---- Reset ----
-    function resetZones() {
-      if (!confirm("This deletes ALL events from Firebase. Continue?")) {
+    // ---- Reset map to the device's current location ----
+    function resetZoneToCurrentLocation() {
+      if (!navigator.geolocation) {
+        alert("Location is not supported by this browser.");
         return;
       }
 
-      db.ref('events')
-        .remove()
-        .then(function() {
-          zones.forEach(function(z) {
-            if (z.circle) {
-              map.removeLayer(z.circle);
-            }
-          });
+      var button = document.getElementById('resetBtn');
+      button.disabled = true;
+      button.innerText = 'Requesting location...';
 
-          zones = [];
-          processedEventIds.clear();
-          firstEventCentered = false;
+      navigator.geolocation.getCurrentPosition(function(position) {
+        var lat = position.coords.latitude;
+        var lon = position.coords.longitude;
+        var accuracy = position.coords.accuracy;
 
-          updatePanel();
+        map.setView([lat, lon], 17);
 
-          document.getElementById('pipelineFeed').innerHTML =
-            '<div class="idle">Waiting for events...</div>';
+        if (currentLocationMarker) {
+          map.removeLayer(currentLocationMarker);
+        }
+        if (currentLocationAccuracy) {
+          map.removeLayer(currentLocationAccuracy);
+        }
 
-          alert("Zones reset.");
-        })
-        .catch(function(err) {
-          alert("Reset failed: " + err.message);
-        });
+        currentLocationMarker = L.marker([lat, lon])
+          .addTo(map)
+          .bindPopup('📍 Your current location<br>' + lat.toFixed(6) + ', ' + lon.toFixed(6))
+          .openPopup();
+        currentLocationAccuracy = L.circle([lat, lon], {
+          radius: accuracy,
+          color: '#337ab7',
+          fillColor: '#337ab7',
+          fillOpacity: 0.12,
+          weight: 1
+        }).addTo(map);
+
+        button.disabled = false;
+        button.innerText = 'Reset Zone / Use My Location';
+        document.getElementById('status').innerText =
+          'Current location: ' + lat.toFixed(6) + ', ' + lon.toFixed(6);
+      }, function(error) {
+        button.disabled = false;
+        button.innerText = 'Reset Zone / Use My Location';
+        var message = error.code === error.PERMISSION_DENIED
+          ? 'Location permission was denied. Allow location access and try again.'
+          : 'Unable to get your current location: ' + error.message;
+        alert(message);
+      }, {
+        enableHighAccuracy: true,
+        timeout: 15000,
+        maximumAge: 0
+      });
     }
   </script>
 </body>

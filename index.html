@@ -1,10 +1,150 @@
 <!DOCTYPE html>
-<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Road Safety - Car Sensor</title><style>body{font-family:Arial;text-align:center;background:#111;color:#fff;padding:40px 20px}h1{font-size:28px}#carId{font-size:40px;color:#4CAF50;font-weight:bold;margin:20px 0}#status{font-size:18px;margin-top:20px;color:#ccc}#startBtn{background:#4CAF50;color:#fff;border:0;padding:15px 30px;font-size:18px;border-radius:8px;margin-top:20px}#eventLog{margin-top:30px;text-align:left;background:#222;padding:10px;border-radius:8px;max-height:200px;overflow-y:auto;font-size:13px}.event{color:#ff5252;margin-bottom:6px}</style></head><body><h1>🚗 Road Safety Sensor</h1><div>You are logged in as:</div><div id="carId">Loading...</div><button id="startBtn">Start Driving (Enable Sensors)</button><div id="status">Press the button, then shake / stop the phone suddenly to simulate danger</div><div id="eventLog"></div>
-<script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script><script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script><script>
-const firebaseConfig={apiKey:"AIzaSyDb14lZDrU4XASL2IQB3GE4QxIlpobUkYd",authDomain:"road-safety-hackathon-16b7d.firebaseapp.com",projectId:"road-safety-hackathon-16b7d",storageBucket:"road-safety-hackathon-16b7d.firebasestorage.app",messagingSenderId:"697637294869",appId:"1:697637294869:web:ff212611521af2bdcecf1c",measurementId:"G-Y21NXEML0L",databaseURL:"https://road-safety-hackathon-16b7d-default-rtdb.firebaseio.com/"};firebase.initializeApp(firebaseConfig);const db=firebase.database();let carId=localStorage.getItem('car_id');
-if(!carId){db.ref('car_counter').transaction(c=>(c||0)+1).then(r=>{carId='Car '+r.snapshot.val();localStorage.setItem('car_id',carId);document.getElementById('carId').innerText=carId}).catch(()=>{carId='Car-'+Math.random().toString(36).slice(2,8);localStorage.setItem('car_id',carId);document.getElementById('carId').innerText=carId})}else document.getElementById('carId').innerText=carId;
-let currentLat=12.9716,currentLon=77.5946;if(navigator.geolocation)navigator.geolocation.watchPosition(p=>{currentLat=p.coords.latitude;currentLon=p.coords.longitude},e=>console.warn(e.message),{enableHighAccuracy:true});let lastX=0,lastY=0,lastZ=0,lastEventTime=0;const SHAKE_THRESHOLD=15;
-function handleMotion(e){const a=e.accelerationIncludingGravity;if(!a)return;const x=Number(a.x||0),y=Number(a.y||0),z=Number(a.z||0),d=Math.abs(x-lastX)+Math.abs(y-lastY)+Math.abs(z-lastZ);lastX=x;lastY=y;lastZ=z;const now=Date.now();if(d>SHAKE_THRESHOLD&&now-lastEventTime>1500){lastEventTime=now;sendEvent(d,{x,y,z})}}
-function sendEvent(m,a){db.ref('events').push({car_id:carId||'UNKNOWN',lat:currentLat,lon:currentLon,accel_x:a.x,accel_y:a.y,accel_z:a.z,magnitude:m,timestamp:new Date().toISOString()});const line=document.createElement('div');line.className='event';line.innerText=`⚠️ Event sent! Magnitude: ${m.toFixed(1)} at ${new Date().toLocaleTimeString()}`;document.getElementById('eventLog').prepend(line);document.getElementById('status').innerText='Event detected and sent to Firebase!'}
-document.getElementById('startBtn').addEventListener('click',()=>{if(typeof DeviceMotionEvent!=='undefined'&&typeof DeviceMotionEvent.requestPermission==='function'){DeviceMotionEvent.requestPermission().then(r=>{if(r==='granted'){window.addEventListener('devicemotion',handleMotion);document.getElementById('status').innerText='Sensors active! Shake or stop suddenly.'}else document.getElementById('status').innerText='Permission denied.'}).catch(e=>document.getElementById('status').innerText='Sensor permission error: '+e.message)}else{window.addEventListener('devicemotion',handleMotion);document.getElementById('status').innerText='Sensors active! Shake or stop suddenly.'}});
-</script></body></html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Road Safety Sensor</title>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; text-align: center; background: #111; color: #fff; padding: 30px 20px; }
+    h1 { font-size: 28px; }
+    #carId { font-size: 36px; color: #4caf50; font-weight: bold; margin: 20px 0; }
+    input, button { box-sizing: border-box; width: min(400px, 100%); padding: 14px; margin-top: 12px; font-size: 17px; border-radius: 7px; }
+    input { border: 1px solid #666; }
+    button { background: #4caf50; color: #fff; border: 0; cursor: pointer; }
+    button:disabled { background: #555; }
+    #status { font-size: 17px; margin-top: 20px; color: #ccc; }
+    #eventLog { margin: 25px auto; text-align: left; background: #222; padding: 12px; border-radius: 8px; max-width: 400px; max-height: 220px; overflow-y: auto; font-size: 14px; }
+    .event { color: #ff5252; margin-bottom: 8px; }
+    .success { color: #4caf50; }
+    .warning { color: #ff9800; }
+  </style>
+</head>
+<body>
+  <h1>Road Safety Sensor</h1>
+  <div>Vehicle:</div>
+  <div id="carId">Loading...</div>
+  <input id="phoneNumber" type="tel" inputmode="numeric" autocomplete="tel" placeholder="Indian mobile number for SMS alerts" maxlength="13">
+  <button id="startBtn">Start Driving</button>
+  <div id="status">Enter your number, then start driving.</div>
+  <div id="eventLog"></div>
+
+  <script>
+    const firebaseConfig = {
+      apiKey: "AIzaSyDb14lZDrU4XASL2IQB3GE4QxIlpobUkYd",
+      authDomain: "road-safety-hackathon-16b7d.firebaseapp.com",
+      databaseURL: "https://road-safety-hackathon-16b7d-default-rtdb.firebaseio.com/",
+      projectId: "road-safety-hackathon-16b7d",
+      storageBucket: "road-safety-hackathon-16b7d.firebasestorage.app",
+      messagingSenderId: "697637294869",
+      appId: "1:697637294869:web:ff212611521af2bdcecf1c"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+
+    const backendUrl = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
+      ? `${window.location.protocol}//${window.location.hostname}:5000`
+      : "/.netlify/functions/api";
+    const deviceId = localStorage.getItem("device_id") || `device-${Math.random().toString(36).slice(2, 10)}`;
+    let carId = localStorage.getItem("car_id");
+    localStorage.setItem("device_id", deviceId);
+    if (carId) document.getElementById("carId").innerText = carId;
+    else {
+      db.ref("car_counter").transaction(value => (value || 0) + 1).then(result => {
+        carId = `Car ${result.snapshot.val()}`;
+        localStorage.setItem("car_id", carId);
+        document.getElementById("carId").innerText = carId;
+      }).catch(() => {
+        carId = "Car 1";
+        document.getElementById("carId").innerText = carId;
+      });
+    }
+
+    let currentLat = 12.9716;
+    let currentLon = 77.5946;
+    let lastX = 0;
+    let lastY = 0;
+    let lastZ = 0;
+    let lastEventTime = 0;
+    const SHAKE_THRESHOLD = 15;
+
+    if (navigator.geolocation) {
+      navigator.geolocation.watchPosition(position => {
+        currentLat = position.coords.latitude;
+        currentLon = position.coords.longitude;
+      }, error => {
+        document.getElementById("status").innerText = `GPS unavailable: ${error.message}`;
+      }, { enableHighAccuracy: true });
+    }
+
+    function setStatus(message, className) {
+      document.getElementById("status").innerHTML = `<span class="${className || ""}">${message}</span>`;
+    }
+
+    async function sendEvent(magnitude, accelX = null, accelY = null, accelZ = null) {
+      const phoneNumber = document.getElementById("phoneNumber").value.trim();
+      const event = { deviceId, carId, phoneNumber, lat: currentLat, lon: currentLon, latitude: currentLat, longitude: currentLon, magnitude, accelX, accelY, accelZ, accel_x: accelX, accel_y: accelY, accel_z: accelZ, accelerometer: { x: accelX, y: accelY, z: accelZ }, timestamp: new Date().toISOString() };
+      let result = null;
+      try {
+        const response = await fetch(`${backendUrl}/api/events`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(event)
+        });
+        result = await response.json();
+        if (!response.ok) throw new Error(result.message || "Backend request failed");
+      } catch (backendError) {
+        const eventRef = db.ref("events").push();
+        const eventData = { ...event, car_id: carId, firebase_source: "netlify" };
+        const carKey = String(carId).replace(/[.#$\/\[\]]/g, "_");
+        await db.ref().update({
+          [`events/${eventRef.key}`]: eventData,
+          [`car_events/${carKey}/${eventRef.key}`]: eventData
+        });
+        result = { message: "Event stored in Firebase. SMS needs the backend to be publicly reachable.", smsSent: false };
+      }
+
+      const line = document.createElement("div");
+      line.className = "event";
+      const eventTime = new Date(event.timestamp).toLocaleString();
+      line.innerText = `Magnitude: ${magnitude.toFixed(1)} | ${eventTime} | ${result.smsSent ? "SMS sent" : result.message}`;
+      document.getElementById("eventLog").prepend(line);
+      setStatus(result.smsSent ? "Alert SMS submitted successfully." : result.message, result.smsSent ? "success" : "warning");
+    }
+
+    function handleMotion(event) {
+      const acceleration = event.accelerationIncludingGravity;
+      if (!acceleration) return;
+      const x = Number(acceleration.x || 0);
+      const y = Number(acceleration.y || 0);
+      const z = Number(acceleration.z || 0);
+      const movement = Math.abs(x - lastX) + Math.abs(y - lastY) + Math.abs(z - lastZ);
+      lastX = x; lastY = y; lastZ = z;
+      const now = Date.now();
+      if (movement > SHAKE_THRESHOLD && now - lastEventTime > 1500) {
+        lastEventTime = now;
+        sendEvent(movement, x, y, z).catch(error => setStatus(`Alert failed: ${error.message}`, "warning"));
+      }
+    }
+
+    document.getElementById("startBtn").addEventListener("click", async () => {
+      const phone = document.getElementById("phoneNumber").value.replace(/\D/g, "");
+      if (!/^(?:91)?[6-9]\d{9}$/.test(phone)) {
+        setStatus("Enter a valid 10-digit Indian mobile number.", "warning");
+        return;
+      }
+      try {
+        if (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function") {
+          if (await DeviceMotionEvent.requestPermission() !== "granted") throw new Error("Motion permission denied");
+        }
+        window.addEventListener("devicemotion", handleMotion);
+        document.getElementById("startBtn").disabled = true;
+        setStatus("Sensors active. Shake the phone to send an SMS alert.", "success");
+      } catch (error) {
+        setStatus(error.message, "warning");
+      }
+    });
+  </script>
+</body>
+</html>
